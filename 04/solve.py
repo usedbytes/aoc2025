@@ -21,13 +21,38 @@ adjacent = [
     ( 1,  1),
 ]
 
-part1 = 0
-for (row, col) in grid:
+removable = set()
+
+def count_adjacent(roll):
+    row, col = roll
     nrolls = 0
     for dr, dc in adjacent:
         if (row + dr, col + dc) in grid:
             nrolls += 1
-    if nrolls < 4:
-        part1 += 1
+    return nrolls
 
-print(part1)
+for roll in grid:
+    nrolls = count_adjacent(roll)
+    if nrolls < 4:
+        removable.add(roll)
+
+# Part 1
+print(len(removable))
+
+# Now start removing... Not elegantly
+part2 = 0
+while len(removable) > 0:
+    roll = removable.pop()
+    grid.remove(roll)
+    part2 += 1
+
+    row, col = roll
+    # Re-evaluate all neighbours
+    for dr, dc in adjacent:
+        new_roll = (row + dr, col + dc)
+        if new_roll in grid:
+            nrolls = count_adjacent(new_roll)
+            if nrolls < 4:
+                removable.add(new_roll)
+# Part 2
+print(part2)

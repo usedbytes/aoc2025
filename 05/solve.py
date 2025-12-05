@@ -22,3 +22,19 @@ with open(sys.argv[1]) as f:
                 part1 += 1
                 break
 print(part1)
+
+# Sort and combine
+ranges.sort()
+start, end = ranges[0]
+part2 = 0
+for r in ranges[1:]:
+    if r[0] > end:
+        # There's a gap
+        part2 += (end - start) + 1
+        start, end = r
+    else:
+        # Merge
+        end = max(end, r[1])
+part2 += (end - start) + 1
+
+print(part2)

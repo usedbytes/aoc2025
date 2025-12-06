@@ -8,9 +8,6 @@ with open(sys.argv[1]) as f:
             ncols = len(parts)
             problems = [[] for _ in range(ncols)]
         for i, n in enumerate(parts):
-            try:
-                problems[i].append(int(n))
-            except ValueError:
                 problems[i].append(n)
 
 def product(vs):
@@ -25,5 +22,5 @@ operators = {
 }
 part1 = 0
 for problem in problems:
-    part1 += operators[problem[-1]](problem[:-1])
+    part1 += operators[problem[-1]](map(int, problem[:-1]))
 print(part1)

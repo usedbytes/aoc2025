@@ -30,8 +30,16 @@ circuit_idxs = {
     x: x for x in range(len(boxes))
 }
 
-NCONNS = 1000
-for i in range(NCONNS):
+NCONNS = 10 if len(boxes) < 1000 else 1000
+i = 0
+while True:
+    if i == NCONNS:
+        sizes = sorted(map(len, circuits), reverse=True)
+        part1 = sizes[0] * sizes[1] * sizes[2]
+        print(part1)
+
+    i += 1
+
     _, a, b = heapq.heappop(distances)
     ac = circuits[circuit_idxs[a]]
     bc = circuits[circuit_idxs[b]]
@@ -45,7 +53,7 @@ for i in range(NCONNS):
         circuit_idxs[c] = circuit_idxs[a]
     bc.clear()
 
-sizes = sorted(map(len, circuits), reverse=True)
-
-part1 = sizes[0] * sizes[1] * sizes[2]
-print(part1)
+    if len(ac) == len(boxes):
+        part2 = boxes[a][0] * boxes[b][0]
+        print(part2)
+        break

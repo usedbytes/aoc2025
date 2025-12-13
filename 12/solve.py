@@ -26,46 +26,126 @@ import sys
 Shape = namedtuple("Shape", "dims, group, masks, n_ones, n_zeroes")
 Region = namedtuple("Region", "dims, counts")
 
+def transform_shape(shape):
+    # Lazy.
+    assert shape.dims == (3, 3)
+
+    seen = set()
+    seen.add(shape.masks)
+
+    # R90
+    masks = []
+    for x in [2, 1, 0]:
+        mask = 0
+        for out_bit, y in enumerate([0, 1, 2]):
+            b = ((shape.masks[y] >> x) & 1)
+            mask |= ((shape.masks[y] >> x) & 1) << out_bit
+        masks.append(mask)
+    seen.add(tuple(masks))
+
+    # R180
+    masks = []
+    for y in [2, 1, 0]:
+        mask = 0
+        for out_bit, x in enumerate([2, 1, 0]):
+            mask |= ((shape.masks[y] >> x) & 1) << out_bit
+        masks.append(mask)
+    seen.add(tuple(masks))
+
+    ## R270
+    masks = []
+    for x in [0, 1, 2]:
+        mask = 0
+        for out_bit, y in enumerate([2, 1, 0]):
+            mask |= ((shape.masks[y] >> x) & 1) << out_bit
+        masks.append(mask)
+    seen.add(tuple(masks))
+
+    # Then hflip them all
+    seen_flipped = set()
+    for i, masks in enumerate(seen):
+        flipped = []
+        for y in [0, 1, 2]:
+            mask = 0
+            for out_bit, x in enumerate([2, 1, 0]):
+                mask |= ((masks[y] >> x) & 1) << out_bit
+            flipped.append(mask)
+        seen_flipped.add(tuple(flipped))
+    seen.update(seen_flipped)
+
+    # Finally, make new shapes
+    dims = shape.dims
+    shapes = []
+    for masks in seen:
+        n_ones = []
+        n_zeroes = []
+        # XXX: If they weren't square, we'd need to know to swap w/h
+        for r in masks:
+            n_ones.append(r.bit_count())
+            n_zeroes.append(shape.dims[0] - r.bit_count())
+        new_shape = Shape(shape.dims, shape.group, tuple(masks), tuple(n_ones), tuple(n_zeroes))
+        shapes.append(new_shape)
+    return shapes
+
 with open(sys.argv[1]) as f:
     d = f.read()
     regions = []
     shapes = []
+    group = 0
 
     sections = d.split("\n\n")
     for s in sections:
-        shape = None
+        shape_masks = None
         lines = s.split("\n")
         for line in lines:
             if not line:
                 continue
             if line[-1] == ":":
                 # Shape header
-                shape = []
+                shape_masks = []
                 continue
-            elif shape is not None:
+            elif shape_masks is not None:
                 v = 0
                 shape_w = len(line)
                 for i, c in enumerate(line):
                     if c == '#':
                         v |= 1 << i
-                shape.append(v)
+                shape_masks.append(v)
             else:
                 size, counts = line.split(": ")
                 sx, sy = map(int, size.split("x"))
                 counts = [int(v) for v in counts.split(" ")]
                 regions.append(Region((sx, sy), counts))
-        if shape is not None:
+        if shape_masks is not None:
             # Parse, add to shapes
-            dims = (shape_w, len(shape))
-            group = len(shapes)
-            masks = []
+            dims = (shape_w, len(shape_masks))
             n_ones = []
             n_zeroes = []
-            for r in shape:
-                masks.append(r)
+            for r in shape_masks:
                 n_ones.append(r.bit_count())
                 n_zeroes.append(shape_w - r.bit_count())
-            shapes.append(Shape(dims, group, tuple(masks), tuple(n_ones), tuple(n_zeroes)))
+            shape = Shape(dims, group, tuple(shape_masks), tuple(n_ones), tuple(n_zeroes))
+            group += 1
+
+            xshapes = transform_shape(shape)
+            shapes.extend(xshapes)
+
+def draw_grid(rows, ncols = 1):
+    # Make sure we draw _something_
+    ncols = max(ncols, max(map(lambda v: v.bit_length(), rows)))
+    for row in rows:
+        s = ""
+        for i in range(ncols):
+            if row & (1 << i):
+                s += "#"
+            else:
+                s += "."
+        print(s)
+
+print(f"{len(shapes)=}")
+#for i, shape in enumerate(shapes):
+#    print(f"{i}:, {shape.group=}")
+#    draw_grid(shape.masks, 3)
 
 # Row 0, bit 0, is top-left
 # =========================
@@ -89,18 +169,6 @@ for n, r in enumerate(regions):
 
 print(f"{dropped=}, kept={len(kept_regions)}")
 
-def draw_grid(rows, ncols = 1):
-    # Make sure we draw _something_
-    ncols = max(ncols, max(map(lambda v: v.bit_length(), rows)))
-    for row in rows:
-        s = ""
-        for i in range(ncols):
-            if row & (1 << i):
-                s += "#"
-            else:
-                s += "."
-        print(s)
-
 def score(shape, grid, x, y, w, h, roi):
     if x > (w - shape.dims[0]):
         return 0
@@ -115,7 +183,7 @@ def score(shape, grid, x, y, w, h, roi):
         roi_zeroes = roi[y + i] & (~grid[y + i])
         newly_set = (mask << x) & roi_zeroes
         zeroes_removed += newly_set.bit_count()
-    return zeroes_removed
+    return (zeroes_removed * 2) + 1
 
 def place(shape, grid, x, y, roi):
     for i, mask in enumerate(shape.masks):
@@ -167,6 +235,8 @@ for r in kept_regions:
 
         print(f"{best_score=}, {best=}")
         if best_score == 0:
+            most = max(counts)
+            argmax = counts.index(most)
             assert False, "all scores 0"
 
         best_idx = best[0]
@@ -180,5 +250,3 @@ for r in kept_regions:
 
         counts[shape.group] -= 1
         to_place -= 1
-
-    break

@@ -1,4 +1,5 @@
 from collections import namedtuple
+import heapq
 import sys
 
 # Vague plan:
@@ -92,6 +93,7 @@ with open(sys.argv[1]) as f:
     regions = []
     shapes = []
     group = 0
+    shape_ones = []
 
     sections = d.split("\n\n")
     for s in sections:
@@ -124,6 +126,7 @@ with open(sys.argv[1]) as f:
             for r in shape_masks:
                 n_ones.append(r.bit_count())
                 n_zeroes.append(shape_w - r.bit_count())
+            shape_ones.append(sum(n_ones))
             shape = Shape(dims, group, tuple(shape_masks), tuple(n_ones), tuple(n_zeroes))
             group += 1
 
@@ -169,6 +172,15 @@ for n, r in enumerate(regions):
 
 print(f"{dropped=}, kept={len(kept_regions)}")
 
+def still_possible(grid, counts, w):
+    total_grid_cells = w * len(grid)
+    total_zeroes_left = total_grid_cells - sum(r.bit_count() for r in grid)
+    total_shape_ones = sum(
+        shape_ones[i] * counts[i] for i in range(len(counts))
+    )
+
+    return total_shape_ones <= total_zeroes_left
+
 def score(shape, grid, x, y, w, h, roi):
     if x > (w - shape.dims[0]):
         return 0
@@ -191,9 +203,98 @@ def place(shape, grid, x, y, roi):
         # XXX: Hard-coded shape width of 3...
         roi[y + i] |= (0x7 << x)
 
+def grid_fill_ratio(grid, roi):
+    total_ones = 0
+    total_zeroes = 0
+    for i, row in enumerate(grid):
+        total_ones += row.bit_count()
+        total_zeroes += (roi[i] & ~row).bit_count()
+
+    if total_zeroes == 0:
+        return 1.0
+    else:
+        return total_ones / total_zeroes
+
+def explore(grid, roi, counts, w, h):
+    #print(f"{counts=}")
+    if not still_possible(grid, counts, w):
+        draw_grid(grid, w)
+        print("Bust")
+        return False
+
+    if counts == [0] * len(counts):
+        draw_grid(grid, w)
+        return True
+
+    max_x = min(w, max(
+        r.bit_length() for r in roi
+    ) + 1)
+    max_y = min(h, max(
+        i if r > 0 else 0 for i, r in enumerate(roi)
+    ) + 1)
+
+    for y in range(max_y):
+        for x in range(max_x):
+            for i, shape in enumerate(shapes):
+                if counts[shape.group] == 0:
+                    # Quota met - don't place
+                    continue
+
+                s = score(shape, grid, x, y, w, h, roi)
+                if s > 0:
+                    new_grid, new_roi = grid.copy(), roi.copy()
+                    place(shape, new_grid, x, y, new_roi)
+                    placed = True
+                    new_counts = counts.copy()
+                    new_counts[shape.group] -= 1
+                    if explore(new_grid, new_roi, new_counts, w, h):
+                        return True
+    return False
+
+def do(heap, w, h):
+    while True:
+        if len(heap) == 0:
+            return False
+        _, grid, roi, counts = heapq.heappop(heap)
+        print("front runner:", counts)
+        draw_grid(grid, w)
+
+        if counts == [0] * len(counts):
+            return True
+
+        max_x = min(w, max(
+            r.bit_length() for r in roi
+        ) + 1)
+        max_y = min(h, max(
+            i if r > 0 else 0 for i, r in enumerate(roi)
+        ) + 1)
+
+        for y in range(max_y):
+            for x in range(max_x):
+                for i, shape in enumerate(shapes):
+                    if counts[shape.group] == 0:
+                        # Quota met - don't place
+                        continue
+
+                    s = score(shape, grid, x, y, w, h, roi)
+                    if s > 0:
+                        new_grid, new_roi = grid.copy(), roi.copy()
+                        place(shape, new_grid, x, y, new_roi)
+                        placed = True
+                        new_counts = counts.copy()
+                        new_counts[shape.group] -= 1
+                        ratio = grid_fill_ratio(new_grid, new_roi)
+                        heapq.heappush(heap, (
+                            ratio,
+                            new_grid,
+                            new_roi,
+                            new_counts
+                        ))
+
+p1 = 0
 # Now explore the ones which are left
-for r in kept_regions:
-    print(r)
+for n, r in enumerate(kept_regions):
+    print(n, r)
 
     w, h = r.dims
 
@@ -210,6 +311,10 @@ for r in kept_regions:
 
     counts = r.counts.copy()
     to_place = sum(counts)
+
+    if explore(grid, roi, counts, w, h):
+        p1 += 1
+    continue
 
     while to_place > 0:
         print(f"Still to place: {to_place}, {counts}")
@@ -235,8 +340,6 @@ for r in kept_regions:
 
         print(f"{best_score=}, {best=}")
         if best_score == 0:
-            most = max(counts)
-            argmax = counts.index(most)
             assert False, "all scores 0"
 
         best_idx = best[0]
@@ -250,3 +353,4 @@ for r in kept_regions:
 
         counts[shape.group] -= 1
         to_place -= 1
+print(p1)

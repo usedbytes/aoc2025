@@ -1,0 +1,184 @@
+from collections import namedtuple
+import sys
+
+# Vague plan:
+# 1. Parse input shapes into arrays of integers, one per line. '1' for '#'
+#   - Shape has list of rows: [(row_mask, n_ones, n_zeros), ...]
+# 2. Calculate rotates/flips for each shape (8 variants)
+#   - R0
+#   - R90: Right column first
+#   - R270: Left column upwards first
+#   - R180: Bottom row backwards
+#   - HFLIP for each: iterate each row backwards
+# 3. Deduplicate the shapes (some are symmetric)
+# 4. Shapes is a flat list, but each remembers which id (group) it is
+# 5. Build the grid - just a list of integers (all 0)
+# 6. Start at offset (0,0)
+# 7. Try each shape in turn:
+#     - AND mask with grid, check for collision
+#     - If no collision, calculate a score: number of zeroes removed within the
+#       current ROI
+# 8. Pick the best score - place shape, update ROI, subtract from pool count
+# 9. Move to next offset
+# BUT I don't know how we can be sure in the case of failures - do we need to
+# try all permutations?
+
+Shape = namedtuple("Shape", "dims, group, masks, n_ones, n_zeroes")
+Region = namedtuple("Region", "dims, counts")
+
+with open(sys.argv[1]) as f:
+    d = f.read()
+    regions = []
+    shapes = []
+
+    sections = d.split("\n\n")
+    for s in sections:
+        shape = None
+        lines = s.split("\n")
+        for line in lines:
+            if not line:
+                continue
+            if line[-1] == ":":
+                # Shape header
+                shape = []
+                continue
+            elif shape is not None:
+                v = 0
+                shape_w = len(line)
+                for i, c in enumerate(line):
+                    if c == '#':
+                        v |= 1 << i
+                shape.append(v)
+            else:
+                size, counts = line.split(": ")
+                sx, sy = map(int, size.split("x"))
+                counts = [int(v) for v in counts.split(" ")]
+                regions.append(Region((sx, sy), counts))
+        if shape is not None:
+            # Parse, add to shapes
+            dims = (shape_w, len(shape))
+            group = len(shapes)
+            masks = []
+            n_ones = []
+            n_zeroes = []
+            for r in shape:
+                masks.append(r)
+                n_ones.append(r.bit_count())
+                n_zeroes.append(shape_w - r.bit_count())
+            shapes.append(Shape(dims, group, tuple(masks), tuple(n_ones), tuple(n_zeroes)))
+
+# Row 0, bit 0, is top-left
+# =========================
+
+# First, drop all the regions which trivially _won't_ fit
+kept_regions = []
+dropped = 0
+for n, r in enumerate(regions):
+    total_grid_cells = r.dims[0] * r.dims[1]
+    total_shape_ones = 0
+    for i, c in enumerate(r.counts):
+        shape = shapes[i]
+        total_shape_ones += (sum(shape.n_ones) * c)
+
+    print(f"{n}: {r} empty: {total_grid_cells - total_shape_ones}")
+    if total_shape_ones <= total_grid_cells:
+        # We have to test it
+        kept_regions.append(r)
+    else:
+        dropped += 1
+
+print(f"{dropped=}, kept={len(kept_regions)}")
+
+def draw_grid(rows, ncols = 1):
+    # Make sure we draw _something_
+    ncols = max(ncols, max(map(lambda v: v.bit_length(), rows)))
+    for row in rows:
+        s = ""
+        for i in range(ncols):
+            if row & (1 << i):
+                s += "#"
+            else:
+                s += "."
+        print(s)
+
+def score(shape, grid, x, y, w, h, roi):
+    if x > (w - shape.dims[0]):
+        return 0
+    if y > (h - shape.dims[1]):
+        return 0
+
+    zeroes_removed = 0
+    for i, mask in enumerate(shape.masks):
+        if grid[y + i] & (mask << x):
+            # Collision
+            return 0
+        roi_zeroes = roi[y + i] & (~grid[y + i])
+        newly_set = (mask << x) & roi_zeroes
+        zeroes_removed += newly_set.bit_count()
+    return zeroes_removed
+
+def place(shape, grid, x, y, roi):
+    for i, mask in enumerate(shape.masks):
+        grid[y + i] |= mask << x
+        # XXX: Hard-coded shape width of 3...
+        roi[y + i] |= (0x7 << x)
+
+# Now explore the ones which are left
+for r in kept_regions:
+    print(r)
+
+    w, h = r.dims
+
+    grid = [0] * h
+
+    # Initial ROI tries to fill the corner
+    #  ###
+    #  #..
+    #  #..
+    roi = [0] * h
+    roi[0] = 0x7
+    roi[1] = 0x1
+    roi[2] = 0x1
+
+    counts = r.counts.copy()
+    to_place = sum(counts)
+
+    while to_place > 0:
+        print(f"Still to place: {to_place}, {counts}")
+        # [shape_idx, x, y]
+        best = [-1, -1, -1]
+        best_score = 0
+        # Exhaustive search over full w/h range might be too much on real input
+        # We can cut it down using roi bit_lengths.
+        for y in range(h):
+            for x in range(w):
+                # Try placing every shape, pick the one with the best score
+                # TODO: What if scores are all zero?!
+                for i, shape in enumerate(shapes):
+
+                    if counts[shape.group] == 0:
+                        # Quota met - don't place
+                        continue
+
+                    s = score(shape, grid, x, y, w, h, roi)
+                    if s > best_score:
+                        best_score = s
+                        best = [i, x, y]
+
+        print(f"{best_score=}, {best=}")
+        if best_score == 0:
+            assert False, "all scores 0"
+
+        best_idx = best[0]
+        if best_idx < 0:
+            assert False, "failed to place all shapes"
+
+        shape = shapes[best_idx]
+        place(shape, grid, best[1], best[2], roi)
+
+        draw_grid(grid, w)
+
+        counts[shape.group] -= 1
+        to_place -= 1
+
+    break

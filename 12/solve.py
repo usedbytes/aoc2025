@@ -14,15 +14,20 @@ import sys
 # 3. Deduplicate the shapes (some are symmetric)
 # 4. Shapes is a flat list, but each remembers which id (group) it is
 # 5. Build the grid - just a list of integers (all 0)
-# 6. Start at offset (0,0)
-# 7. Try each shape in turn:
-#     - AND mask with grid, check for collision
-#     - If no collision, calculate a score: number of zeroes removed within the
-#       current ROI
-# 8. Pick the best score - place shape, update ROI, subtract from pool count
-# 9. Move to next offset
-# BUT I don't know how we can be sure in the case of failures - do we need to
-# try all permutations?
+# 6. Exhaustively try packing the grid
+#   - Search is driven by "ROI", which is the space currently occupied by
+#     shapes + 1 cell of border; this helps cut down the search space
+#     (could be optimised further by not searching places where there's no
+#     change of placing a shape)
+#   - ROI starts with a few cells in one corner
+#   - Once a shape has been placed, update ROI
+#
+#
+# A much better idea than ROI would be to have a mask of (x,y) positions to
+# try. Once a shape has been placed at an (x,y) coordinate, no other shape can
+# be placed there (assuming shapes are always > 50% filled space.
+# Additionally, any cell which doesn't have enough free space around it can also
+# be cleared in the place-mask.
 
 Shape = namedtuple("Shape", "dims, group, masks, n_ones, n_zeroes")
 Region = namedtuple("Region", "dims, counts")
@@ -170,28 +175,25 @@ for n, r in enumerate(regions):
 
 print(f"{dropped=}, kept={len(kept_regions)}")
 
-def score(shape, grid, x, y, w, h, roi):
+# Returns None if can't place here, otherwise (new_grid, new_roi)
+def place(shape, grid, x, y, w, h, roi):
     if x > (w - shape.dims[0]):
-        return 0
+        return None
     if y > (h - shape.dims[1]):
-        return 0
+        return None
 
-    zeroes_removed = 0
     for i, mask in enumerate(shape.masks):
         if grid[y + i] & (mask << x):
             # Collision
-            return 0
-        roi_zeroes = roi[y + i] & (~grid[y + i])
-        newly_set = (mask << x) & roi_zeroes
-        zeroes_removed += newly_set.bit_count()
-    return (zeroes_removed * 2) + 1
+            return None
 
-
-def place(shape, grid, x, y, roi):
+    new_grid = grid.copy()
+    new_roi = roi.copy()
     for i, mask in enumerate(shape.masks):
-        grid[y + i] |= mask << x
+        new_grid[y + i] |= mask << x
         # XXX: Hard-coded shape width of 3...
-        roi[y + i] |= (0x7 << x)
+        new_roi[y + i] |= (0x7 << x)
+    return (new_grid, new_roi)
 
 # Recursively place shapes around the edge of roi
 def explore(grid, roi, counts, w, h):
@@ -217,15 +219,15 @@ def explore(grid, roi, counts, w, h):
                     # Quota met - don't place
                     continue
 
-                s = score(shape, grid, x, y, w, h, roi)
-                if s > 0:
-                    new_grid, new_roi = grid.copy(), roi.copy()
-                    place(shape, new_grid, x, y, new_roi)
-                    placed = True
-                    new_counts = counts.copy()
-                    new_counts[shape.group] -= 1
-                    if explore(new_grid, new_roi, new_counts, w, h):
-                        return True
+                res = place(shape, grid, x, y, w, h, roi)
+                if res is None:
+                    # Can't place here
+                    continue
+
+                new_counts = counts.copy()
+                new_counts[shape.group] -= 1
+                if explore(res[0], res[1], new_counts, w, h):
+                    return True
     return False
 
 p1 = 0
